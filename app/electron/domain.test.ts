@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyPatch,
   clone,
+  decode,
   encode,
   itemLimit,
   parsePlugins,
@@ -90,5 +91,17 @@ describe("MV codec", () => {
   it("uses legacy UTF-16BE base64 framing", () => {
     // Golden output from the game's own MV 1.6.1 codec, including legacy padding.
     expect(encode({ a: 1 })).toBe("N4IghiBcCMC+QA==");
+  });
+});
+describe("MZ codec", () => {
+  it("round-trips the pako-compatible binary save framing", () => {
+    const raw = {
+      system: { _saveEnabled: true, "@": "Game_System" },
+      variables: { _data: [null, "日文", 7], "@": "Game_Variables" },
+      party: { _gold: 123, "@": "Game_Party" },
+    };
+    const encoded = encode(raw, "MZ");
+    expect(encoded.charCodeAt(0)).toBe(0x78);
+    expect(decode(encoded, "MZ")).toEqual(raw);
   });
 });

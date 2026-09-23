@@ -1,8 +1,10 @@
 import LZString from "lz-string";
 import { createHash } from "node:crypto";
+import { deflateSync, inflateSync } from "node:zlib";
 import { patchActor } from "./actor-stats";
 
 export type Raw = Record<string, any>;
+export type SaveFormat = "MV" | "MZ";
 export type Patch = {
   kind: "gold" | "item" | "weapon" | "armor" | "variable" | "switch" | "actor";
   id?: number;
@@ -14,12 +16,43 @@ export const unwrap = (v: any): any[] =>
   v && !Array.isArray(v) && Array.isArray(v["@a"]) ? v["@a"] : v;
 export const hash = (b: Buffer | string) =>
   createHash("sha256").update(b).digest("hex");
-export function decode(encoded: string): Raw {
+function binaryStringToBuffer(value: string): Buffer {
+  const out = Buffer.allocUnsafe(value.length);
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code > 0xff) throw Error("MZ 存档包含无效的二进制数据");
+    out[i] = code;
+  }
+  return out;
+}
+
+function bufferToBinaryString(value: Uint8Array): string {
+  let out = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < value.length; i += chunkSize) {
+    out += String.fromCharCode(...value.subarray(i, i + chunkSize));
+  }
+  return out;
+}
+
+function decodeMZ(encoded: string): Raw {
+  const json = inflateSync(binaryStringToBuffer(encoded)).toString("utf8");
+  return JSON.parse(json);
+}
+
+function encodeMZ(raw: Raw): string {
+  const zip = deflateSync(Buffer.from(JSON.stringify(raw), "utf8"), { level: 1 });
+  return bufferToBinaryString(zip);
+}
+
+export function decode(encoded: string, format: SaveFormat = "MV"): Raw {
+  if (format === "MZ") return decodeMZ(encoded);
   const json = LZString.decompressFromBase64(encoded.trim());
   if (!json) throw Error("存档解压失败");
   return JSON.parse(json);
 }
-export function encode(raw: Raw): string {
+export function encode(raw: Raw, format: SaveFormat = "MV"): string {
+  if (format === "MZ") return encodeMZ(raw);
   const packed = LZString.compress(JSON.stringify(raw));
   const bytes = Buffer.allocUnsafe(packed.length * 2);
   for (let i = 0; i < packed.length; i++)

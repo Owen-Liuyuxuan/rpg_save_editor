@@ -9,6 +9,7 @@ import {
   parsePlugins,
   Patch,
   Raw,
+  SaveFormat,
   unwrap,
   variableLimits,
 } from "./domain";
@@ -23,12 +24,17 @@ type Session = {
   db: any;
   limits: any;
   game: string;
+  format: SaveFormat;
   undo: Raw[];
   redo: Raw[];
 };
 export class SaveService {
   private sessions = new Map<string, Session>();
-  private codec(mode: "decode" | "encode", value: string | Raw): Promise<any> {
+  private codec(
+    mode: "decode" | "encode",
+    value: string | Raw,
+    format: SaveFormat,
+  ): Promise<any> {
     return new Promise((resolve, reject) => {
       const w = new Worker(path.join(__dirname, "codec-worker.js"), {
         resourceLimits: { maxOldGenerationSizeMb: 256 },
@@ -50,19 +56,29 @@ export class SaveService {
         clearTimeout(timer);
         reject(Error("存档编解码进程已结束"));
       });
-      w.postMessage({ mode, value });
+      w.postMessage({ mode, value, format });
     });
   }
   async inspect(gameDir: string) {
     const game = path.resolve(gameDir);
-    const stat = await fs.stat(path.join(game, "data", "System.json"));
-    if (!stat.isFile()) throw Error("所选目录不是有效的 RPG Maker MV www 目录");
-    const core = await fs.readFile(
-      path.join(game, "js", "rpg_core.js"),
-      "utf8",
-    );
+    const existsFile = async (file: string) => {
+      try {
+        return (await fs.stat(file)).isFile();
+      } catch {
+        return false;
+      }
+    };
+    if (!(await existsFile(path.join(game, "data", "System.json"))))
+      throw Error("所选目录不是有效的 RPG Maker MV/MZ 游戏目录");
+    const mzCorePath = path.join(game, "js", "rmmz_core.js");
+    const mvCorePath = path.join(game, "js", "rpg_core.js");
+    const format: SaveFormat = (await existsFile(mzCorePath)) ? "MZ" : "MV";
+    const corePath = format === "MZ" ? mzCorePath : mvCorePath;
+    if (!(await existsFile(corePath)))
+      throw Error("未检测到 RPG Maker MV/MZ 引擎核心文件");
+    const core = await fs.readFile(corePath, "utf8");
     const version = core.match(/RPGMAKER_VERSION\s*=\s*["']([^"']+)["']/)?.[1];
-    if (!version) throw Error("未检测到 RPG Maker MV 引擎版本");
+    if (!version) throw Error(`未检测到 RPG Maker ${format} 引擎版本`);
     const db: any = {};
     for (const n of [
       "System",
@@ -80,27 +96,39 @@ export class SaveService {
       await fs.readFile(path.join(game, "js", "plugins.js"), "utf8"),
     );
     const saveDir = path.join(game, "save");
+    const extension = format === "MZ" ? ".rmmzsave" : ".rpgsave";
     const files = (await fs.readdir(saveDir)).filter((n) =>
-      /^file.+\.rpgsave$/i.test(n),
+      format === "MZ"
+        ? /^file\d+\.rmmzsave$/i.test(n)
+        : /^file.+\.rpgsave$/i.test(n),
     );
     return {
       game,
       saveDir,
       title: db.System.gameTitle,
-      engine: `RPG Maker MV ${version}`,
+      engine: `RPG Maker ${format} ${version}`,
+      format,
+      extension,
       files,
       limits: variableLimits(plugins),
     };
   }
   async open(game: string, name: string) {
-    if (path.basename(name) !== name || !/^file.+\.rpgsave$/i.test(name))
-      throw Error("存档文件名无效");
-    const profile = await this.inspect(game),
-      source = path.join(profile.saveDir, name);
+    const profile = await this.inspect(game);
+    const validName =
+      profile.format === "MZ"
+        ? /^file\d+\.rmmzsave$/i.test(name)
+        : /^file.+\.rpgsave$/i.test(name);
+    if (path.basename(name) !== name || !validName) throw Error("存档文件名无效");
+    const source = path.join(profile.saveDir, name);
     if ((await fs.stat(source)).size > 64 * 1024 * 1024) throw Error("存档过大");
     const buf = await fs.readFile(source);
     if (buf.length > 64 * 1024 * 1024) throw Error("存档过大");
-    const raw = await this.codec("decode", buf.toString("utf8"));
+    const raw = await this.codec(
+      "decode",
+      buf.toString("utf8"),
+      profile.format,
+    );
     if (!raw?.party || !Array.isArray(unwrap(raw.variables?._data)) ||
       !Array.isArray(unwrap(raw.switches?._data)) ||
       !Number.isSafeInteger(raw.party._gold))
@@ -128,6 +156,7 @@ export class SaveService {
       db,
       limits: profile.limits,
       game: profile.game,
+      format: profile.format,
       undo: [],
       redo: [],
     });
@@ -250,11 +279,12 @@ export class SaveService {
       snapshot = clone(s.raw);
     if (path.dirname(target).toLowerCase() === saveDir.toLowerCase())
       throw Error("导出副本必须位于游戏 save 目录之外");
-    if (path.extname(target).toLowerCase() !== ".rpgsave")
-      throw Error("导出文件扩展名必须为 .rpgsave");
+    const extension = s.format === "MZ" ? ".rmmzsave" : ".rpgsave";
+    if (path.extname(target).toLowerCase() !== extension)
+      throw Error(`导出文件扩展名必须为 ${extension}`);
     if (hash(await fs.readFile(s.source)) !== s.sourceHash)
       throw Error("源存档已被游戏修改，请重新加载");
-    const encoded = await this.codec("encode", snapshot);
+    const encoded = await this.codec("encode", snapshot, s.format);
     if (hash(await fs.readFile(s.source)) !== s.sourceHash)
       throw Error("编码期间源存档发生变化，请重新加载");
     let created = false,
@@ -268,6 +298,7 @@ export class SaveService {
       const check = await this.codec(
         "decode",
         await fs.readFile(target, "utf8"),
+        s.format,
       );
       if (JSON.stringify(check) !== JSON.stringify(snapshot))
         throw Error("导出回读验证失败");
@@ -279,12 +310,14 @@ export class SaveService {
     return { target, sha256: hash(await fs.readFile(target)) };
   }
   defaultExport(id: string) {
-    const name = path.basename(this.get(id).source);
+    const s = this.get(id),
+      name = path.basename(s.source),
+      extension = s.format === "MZ" ? ".rmmzsave" : ".rpgsave";
     return path.join(
       os.homedir(),
       "Documents",
       "RPGMaker Save Lab",
-      name.replace(/\.rpgsave$/i, "") + "-副本.rpgsave",
+      name.replace(/\.(?:rpgsave|rmmzsave)$/i, "") + "-副本" + extension,
     );
   }
 }

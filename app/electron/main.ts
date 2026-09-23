@@ -40,7 +40,7 @@ app.whenReady().then(() => {
   ipcMain.handle("pick-game", async (e) => {
     trusted(e);
     const r = await dialog.showOpenDialog({
-      title: "选择游戏 www 目录",
+      title: "选择 RPG Maker 游戏目录",
       properties: ["openDirectory"],
     });
     if (r.canceled) return null;
@@ -65,10 +65,11 @@ app.whenReady().then(() => {
     trusted(e);
     const d = svc.defaultExport(id);
     await fs.mkdir(path.dirname(d), { recursive: true });
+    const extension = path.extname(d).slice(1);
     const r = await dialog.showSaveDialog({
       title: "导出存档副本",
       defaultPath: d,
-      filters: [{ name: "RPG Maker 存档", extensions: ["rpgsave"] }],
+      filters: [{ name: "RPG Maker 存档", extensions: [extension] }],
     });
     return r.canceled ? null : svc.exportCopy(id, r.filePath!);
   });

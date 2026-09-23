@@ -98,11 +98,11 @@ function App() {
           选择游戏目录
         </button>
         <div>
-          <b>{profile?.title || "RPG Maker MV 存档实验室"}</b>
+          <b>{profile?.title || "RPG Maker 存档实验室"}</b>
           <small>
             {profile
               ? `${profile.engine}　${profile.game}`
-              : "请选择游戏的 www 目录"}
+              : "请选择 RPG Maker 游戏目录"}
           </small>
         </div>
         {doc && (
@@ -152,7 +152,9 @@ function App() {
               {n}
             </button>
           ))}
-          <p>仅列出 file*.rpgsave；不会覆盖游戏存档。</p>
+          <p>
+            仅列出 file*{profile?.extension || ".rpgsave"}；不会覆盖游戏存档。
+          </p>
         </aside>
         <section>
           {doc ? (

@@ -21,7 +21,7 @@ foreach ($shortcutPath in $shortcutPaths) {
     $shortcut.TargetPath = $installedExe
     $shortcut.WorkingDirectory = $appInstallDir
     $shortcut.IconLocation = "$installedExe,0"
-    $shortcut.Description = 'RPG Maker MV 存档修改器：角色属性、背包、变量和开关'
+    $shortcut.Description = 'RPG Maker MV/MZ 存档修改器：角色属性、背包、变量和开关'
     $shortcut.Save()
     $verified = $shortcutShell.CreateShortcut($shortcutPath)
     if ($verified.TargetPath -ne $installedExe) { throw 'Shortcut verification failed.' }
